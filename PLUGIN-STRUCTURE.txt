@@ -1,0 +1,25 @@
+wp-migration-plugin/
+├── wp-migration.php          ← Main plugin file (18KB)
+├── FILE-STORAGE.md           ← Storage location documentation
+├── README.md                 ← General plugin documentation  
+├── views/                    ← Admin interface files
+│   ├── migration-interface.php        ← Migration operations UI
+│   └── export-history.php             ← Export management UI
+└── [AUTOMATICALLY CREATED]
+    └── wp-content/migration-exports/  ← Your exported files go here
+
+## File Locations Summary:
+
+### Plugin Files (in wp-content/plugins/)
+- wp-migration.php          - Main plugin logic
+- views/migration-interface.php      - Migration operations
+- views/export-history.php           - Export management
+
+### Storage Location (in wp-content/)
+wp-content/migration-exports/  ← ALL exported files saved here
+
+## Example File Path:
+/wp-content/migration-exports/migration-2024-03-15-14-30-22-abcd1234efgh.json
+
+This plugin saves all migration exports to wp-content/migration-exports/ directory,
+which is automatically created and managed by the plugin.
