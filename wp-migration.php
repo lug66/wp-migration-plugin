@@ -1,34 +1,37 @@
 /**
- * WordPress Site Migration Plugin
+ * WordPress Site Migration Plugin - Complete Implementation
  * 
- * This plugin provides complete site migration functionality with persistent storage.
- * Export files are saved to wp-content/migration-exports/ directory.
+ * This plugin provides comprehensive site migration functionality with persistent storage.
+ * Export files are saved to wp-content/migration-exports/ directory for later use.
  */
 
-// Exit if accessed directly
 if (!defined('ABSPATH')) {
     exit;
 }
 
-// Plugin constants
+// Define constants for plugin paths and directories
 define('MIGRATION_PLUGIN_VERSION', '1.0.0');
 define('MIGRATION_PLUGIN_DIR', plugin_dir_path(__FILE__));
+define('MIGRATION_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('MIGRATION_EXPORTS_DIR', WP_CONTENT_DIR . '/migration-exports');
 
 /**
- * Main Plugin Class
+ * Main Plugin Class with Complete Migration Functionality
  */
 class WP_Site_Migration_Plugin {
     
     private static $instance = null;
     
     public function __construct() {
+        // Register hooks for WordPress admin
         add_action('admin_menu', array($this, 'add_migration_menu'));
+        
+        // AJAX callbacks for file operations
         add_action('wp_ajax_download_migration_file', array($this, 'handle_file_download'));
         add_action('wp_ajax_delete_migration_export', array($this, 'handle_file_deletion'));
         add_action('wp_ajax_bulk_download_exports', array($this, 'handle_bulk_download'));
         
-        // REST API endpoints
+        // REST API endpoints for programmatic migration
         add_action('rest_api_init', array($this, 'register_rest_endpoints'));
     }
     
@@ -39,8 +42,11 @@ class WP_Site_Migration_Plugin {
         return self::$instance;
     }
     
+    /**
+     * Add migration menu items to WordPress admin
+     */
     public function add_migration_menu() {
-        // Main migration menu
+        // Main migration menu under Tools
         add_submenu_page(
             'tools.php',
             __('Site Migration', 'wp-site-migration'),
@@ -50,7 +56,7 @@ class WP_Site_Migration_Plugin {
             array($this, 'render_migration_interface')
         );
         
-        // Export history submenu
+        // Export history submenu to manage stored exports
         add_submenu_page(
             'tools.php',
             __('Export History', 'wp-site-migration'),
@@ -61,24 +67,27 @@ class WP_Site_Migration_Plugin {
         );
     }
     
+    /**
+     * Get or create the exports directory in wp-content
+     */
     public function get_exports_directory() {
         if (!file_exists(MIGRATION_EXPORTS_DIR)) {
             wp_mkdir_p(MIGRATION_EXPORTS_DIR);
         }
         
-        // Set proper permissions
+        // Ensure proper permissions (755 for directories)
         @chmod(MIGRATION_EXPORTS_DIR, 0755);
         
         return MIGRATION_EXPORTS_DIR;
     }
     
     /**
-     * Create persistent export with storage in wp-content/migration-exports/
+     * Create a persistent export and save to wp-content/migration-exports/
      */
     public function create_persistent_export($type = 'full') {
         $export_data = array();
         
-        // Collect data based on type
+        // Collect data based on export type
         if ($type === 'full' || $type === 'content_only') {
             $export_data['wordpress'] = $this->export_wordpress_content();
         }
@@ -87,14 +96,15 @@ class WP_Site_Migration_Plugin {
             $export_data['configuration'] = $this->export_configuration();
         }
         
-        // Add metadata
+        // Add metadata for tracking
         $export_data['metadata'] = array(
             'generated_at' => current_time('mysql'),
             'site_url' => home_url(),
             'wp_version' => get_bloginfo('version'),
             'php_version' => phpversion(),
             'export_type' => $type,
-            'export_version' => '1.0'
+            'export_version' => '1.0',
+            'exported_by' => wp_get_current_user()->display_name
         );
         
         // Get export directory
@@ -106,7 +116,7 @@ class WP_Site_Migration_Plugin {
         $filename = "migration-{$timestamp}-{$random}.json";
         $filepath = $export_dir . '/' . $filename;
         
-        // Save export to file
+        // Save export to file with pretty printing
         $result = file_put_contents($filepath, json_encode($export_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
         
         if ($result === false) {
@@ -117,7 +127,7 @@ class WP_Site_Migration_Plugin {
         }
         
         // Return success with file information
-        $file_url = content_url(basename($export_dir) . '/' . $filename);
+        $file_url = content_url(basename($exports_dir) . '/' . $filename);
         
         return array(
             'success' => true,
@@ -136,7 +146,7 @@ class WP_Site_Migration_Plugin {
     private function export_wordpress_content() {
         global $wpdb;
         
-        // Posts and pages (excluding revisions and nav menu items)
+        // Get all posts and pages (excluding revisions and nav menu items)
         $posts = $wpdb->get_results(
             "SELECT ID, post_title, post_content, post_excerpt, post_status, 
                     post_type, post_name, post_author, post_date, post_date_gmt,
@@ -148,9 +158,10 @@ class WP_Site_Migration_Plugin {
             ARRAY_A
         );
         
-        // Add terms to posts
+        // Add terms and featured images to each post
         $posts_with_terms = array();
         foreach ($posts as $post) {
+            // Get categories and tags for this post
             $terms = wp_get_object_terms($post['ID'], array('category', 'post_tag'), array('fields' => 'slugs'));
             $post['terms'] = array_values(array_map(function($term) {
                 return array('slug' => $term);
@@ -162,10 +173,14 @@ class WP_Site_Migration_Plugin {
                 $post['featured_image'] = wp_get_attachment_url($featured_image);
             }
             
+            // Get post meta (limit to first 10 items for export size)
+            $post_meta = get_post_meta($post['ID']);
+            $post['meta'] = array_slice($post_meta, 0, 10, true);
+            
             $posts_with_terms[] = $post;
         }
         
-        // Users with roles and meta (limited for export)
+        // Export users (limited to first 50 for performance)
         $users = array();
         $user_query = new WP_User_Query(array('fields' => 'all', 'number' => 50));
         foreach ($user_query->get_results() as $user) {
@@ -179,7 +194,7 @@ class WP_Site_Migration_Plugin {
             );
         }
         
-        // Media attachments
+        // Get all media attachments
         $media = $wpdb->get_results(
             "SELECT ID, post_title, guid, post_mime_type, post_content, post_parent
              FROM {$wpdb->posts} 
@@ -189,16 +204,16 @@ class WP_Site_Migration_Plugin {
         
         return array(
             'posts' => $posts_with_terms,
-            'users' => $users,
-            'media' => $media,
             'total_posts' => count($posts_with_terms),
+            'users' => $users,
             'total_users' => count($users),
+            'media' => $media,
             'total_media' => count($media)
         );
     }
     
     /**
-     * Export site configuration
+     * Export site configuration (options, themes, settings)
      */
     private function export_configuration() {
         global $wpdb;
@@ -238,7 +253,7 @@ class WP_Site_Migration_Plugin {
     }
     
     /**
-     * Handle file download via AJAX
+     * Handle file download via AJAX for stored exports
      */
     public function handle_file_download() {
         if (!current_user_can('manage_options')) {
@@ -250,7 +265,7 @@ class WP_Site_Migration_Plugin {
             wp_send_json_error(__('No file specified', 'wp-site-migration'));
         }
         
-        // Verify nonce
+        // Verify nonce for security
         if (!wp_verify_nonce($_GET['_wpnonce'], 'download_migration_file')) {
             wp_send_json_error(__('Invalid request', 'wp-site-migration'));
         }
@@ -261,7 +276,7 @@ class WP_Site_Migration_Plugin {
             wp_send_json_error(__('File not found', 'wp-site-migration'));
         }
         
-        // Send download headers
+        // Set download headers
         header('Content-Type: application/json');
         header('Content-Disposition: attachment; filename="' . basename($filepath) . '"');
         header('Content-Length: ' . filesize($filepath));
@@ -270,7 +285,7 @@ class WP_Site_Migration_Plugin {
     }
     
     /**
-     * Handle file deletion via AJAX
+     * Handle deletion of specific export files
      */
     public function handle_file_deletion() {
         if (!current_user_can('manage_options')) {
@@ -301,7 +316,7 @@ class WP_Site_Migration_Plugin {
     }
     
     /**
-     * Handle bulk download of all exports as ZIP
+     * Handle bulk download of all exports as ZIP archive
      */
     public function handle_bulk_download() {
         if (!current_user_can('manage_options')) {
@@ -322,15 +337,16 @@ class WP_Site_Migration_Plugin {
         $zip_filename = 'migration-backup-' . current_time('Y-m-d') . '.zip';
         $zip_filepath = $exports_dir . '/' . $zip_filename;
         
+        // Create ZIP archive
         $zip = new ZipArchive();
         if ($zip->open($zip_filepath, ZipArchive::CREATE) !== TRUE) {
             wp_die(__('Could not create ZIP archive', 'wp-site-migration'));
         }
         
-        // Add all JSON files to ZIP
+        // Add all JSON files to ZIP (except the ZIP file itself)
         $json_files = glob($exports_dir . '/*.json');
         foreach ($json_files as $file) {
-            if (basename($file) !== $zip_filename) { // Don't include the zip itself
+            if (basename($file) !== $zip_filename) {
                 $relative_name = basename($file);
                 $zip->addFile($file, $relative_name);
             }
@@ -344,30 +360,30 @@ class WP_Site_Migration_Plugin {
         header('Content-Length: ' . filesize($zip_filepath));
         readfile($zip_filepath);
         
-        // Clean up
+        // Clean up the temporary ZIP file
         unlink($zip_filepath);
         exit;
     }
     
     /**
-     * Register REST API endpoints
+     * Register REST API endpoints for programmatic migration access
      */
     public function register_rest_endpoints() {
-        // Export endpoint
+        // Create persistent export endpoint
         register_rest_route('migration/v1', '/export/persistent', array(
             'methods' => 'POST',
             'callback' => array($this, 'rest_create_persistent_export'),
             'permission_callback' => array($this, 'rest_manage_options_permission')
         ));
         
-        // Get all exports endpoint
+        // List all exports endpoint
         register_rest_route('migration/v1', '/exports/list', array(
             'methods' => 'GET',
             'callback' => array($this, 'rest_list_exports'),
             'permission_callback' => array($this, 'rest_manage_options_permission')
         ));
         
-        // Export by filename endpoint
+        // Get specific export by filename
         register_rest_route('migration/v1', '/export/(?P<filename>[a-zA-Z0-9\-]+\.json)', array(
             'methods' => 'GET',
             'callback' => array($this, 'rest_get_export'),
@@ -376,7 +392,7 @@ class WP_Site_Migration_Plugin {
     }
     
     /**
-     * REST callback for creating persistent export
+     * REST API callback for creating persistent export
      */
     public function rest_create_persistent_export($request) {
         $type = $request->get_param('type') ?: 'full';
@@ -395,7 +411,7 @@ class WP_Site_Migration_Plugin {
     }
     
     /**
-     * REST callback for listing exports
+     * REST API callback for listing all exports
      */
     public function rest_list_exports() {
         $exports_dir = $this->get_exports_directory();
@@ -410,7 +426,7 @@ class WP_Site_Migration_Plugin {
         foreach ($files as $filepath) {
             $filename = basename($filepath);
             
-            // Try to get metadata from file
+            // Extract metadata from file if possible
             $metadata = array();
             if (file_exists($filepath)) {
                 $content = json_decode(file_get_contents($filepath), true);
@@ -425,7 +441,8 @@ class WP_Site_Migration_Plugin {
                 'file_url' => content_url(basename($exports_dir) . '/' . $filename),
                 'file_size' => filesize($filepath),
                 'created_at' => $metadata['generated_at'] ?? null,
-                'export_type' => $metadata['export_type'] ?? 'full'
+                'export_type' => $metadata['export_type'] ?? 'full',
+                'exported_by' => $metadata['exported_by'] ?? null
             );
         }
         
@@ -433,7 +450,7 @@ class WP_Site_Migration_Plugin {
     }
     
     /**
-     * REST callback for getting specific export
+     * REST API callback for getting specific export file
      */
     public function rest_get_export($request) {
         $filename = $request->get_param('filename');
@@ -455,31 +472,31 @@ class WP_Site_Migration_Plugin {
     }
     
     /**
-     * Permission callback for REST API
+     * Permission check for REST API endpoints
      */
     public function rest_manage_options_permission() {
         return current_user_can('manage_options');
     }
     
     /**
-     * Render migration interface
+     * Render main migration interface
      */
     public function render_migration_interface() {
         include_once MIGRATION_PLUGIN_DIR . 'views/migration-interface.php';
     }
     
     /**
-     * Render export history interface
+     * Render export history management interface
      */
     public function render_export_history() {
         include_once MIGRATION_PLUGIN_DIR . 'views/export-history.php';
     }
 }
 
-// Initialize plugin
+// Initialize the plugin
 function wp_migration_plugin_init() {
     return WP_Site_Migration_Plugin::get_instance();
 }
 
-// Run plugin
+// Run the plugin
 wp_migration_plugin_init();
